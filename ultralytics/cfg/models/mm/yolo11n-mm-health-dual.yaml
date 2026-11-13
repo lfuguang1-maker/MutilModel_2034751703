@@ -1,0 +1,69 @@
+# Ultralytics YOLOMM 🚀 Health-Utility Dual-modal (RGB+X)
+# 双模态健康-效用路由检测器：availability mask + 双路骨干 + P3/P4/P5 三输入 MMHealthFusion
+# 要求数据: mm_use_mask: true（契约 mask_channels=2，fused=6ch，input=8ch）
+# 数据示例: modality_used: [rgb, ir]（X 槽位模态名自定，如 ir/event/depth），modality_ch: {rgb: 3, ir: 3}
+
+nc: 80
+scales:
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024]
+  s: [0.50, 0.50, 1024]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.50, 512]
+
+backbone:
+  # ========== Mask 伪源（恒等直通 [B,2,H,W]）==========
+  - [-1, 1, MMMask, [], 'Mask']             # 0 availability mask
+
+  # ========== A路径 (RGB) - 层1-11 ==========
+  - [-1, 1, Conv, [64, 3, 2], 'A']          # 1-P1/2
+  - [-1, 1, Conv, [128, 3, 2]]              # 2-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]       # 3
+  - [-1, 1, Conv, [256, 3, 2]]              # 4-P3/8 (A_P3)
+  - [-1, 2, C3k2, [512, False, 0.25]]       # 5
+  - [-1, 1, Conv, [512, 3, 2]]              # 6-P4/16
+  - [-1, 2, C3k2, [512, True]]              # 7 (A_P4)
+  - [-1, 1, Conv, [1024, 3, 2]]             # 8-P5/32
+  - [-1, 2, C3k2, [1024, True]]             # 9
+  - [-1, 1, SPPF, [1024, 5]]                # 10
+  - [-1, 2, C2PSA, [1024]]                  # 11 (A_P5)
+
+  # ========== B路径 (X 模态) - 层12-22 ==========
+  - [-1, 1, Conv, [64, 3, 2], 'B']          # 12
+  - [-1, 1, Conv, [128, 3, 2]]              # 13
+  - [-1, 2, C3k2, [256, False, 0.25]]       # 14
+  - [-1, 1, Conv, [256, 3, 2]]              # 15-P3/8 (B_P3)
+  - [-1, 2, C3k2, [512, False, 0.25]]       # 16
+  - [-1, 1, Conv, [512, 3, 2]]              # 17-P4/16
+  - [-1, 2, C3k2, [512, True]]              # 18 (B_P4)
+  - [-1, 1, Conv, [1024, 3, 2]]             # 19-P5/32
+  - [-1, 2, C3k2, [1024, True]]             # 20
+  - [-1, 1, SPPF, [1024, 5]]                # 21
+  - [-1, 2, C2PSA, [1024]]                  # 22 (B_P5)
+
+  # ========== 三尺度健康-效用融合（双模态口径）==========
+  # groups [[0],[1]]: Appearance=(RGB), Auxiliary=(X)
+  - [[5, 16, 0], 1, MMHealthFusion, [256, [[0], [1]], True]]    # 23 P3 融合
+  - [[7, 18, 0], 1, MMHealthFusion, [512, [[0], [1]], True]]    # 24 P4 融合
+  - [[11, 22, 0], 1, MMHealthFusion, [1024, [[0], [1]], True]]  # 25 P5 融合
+
+# 标准YOLOv11检测头
+head:
+  - [25, 1, nn.Upsample, [None, 2, "nearest"]]  # 26
+  - [[-1, 24], 1, Concat, [1]]                  # 27
+  - [-1, 2, C3k2, [512, False]]                 # 28
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]  # 29
+  - [[-1, 23], 1, Concat, [1]]                  # 30
+  - [-1, 2, C3k2, [256, False]]                 # 31 (P3/8-small)
+
+  - [-1, 1, Conv, [256, 3, 2]]                  # 32
+  - [[-1, 28], 1, Concat, [1]]                  # 33
+  - [-1, 2, C3k2, [512, False]]                 # 34 (P4/16-medium)
+
+  - [-1, 1, Conv, [512, 3, 2]]                  # 35
+  - [[-1, 25], 1, Concat, [1]]                  # 36
+  - [-1, 2, C3k2, [1024, True]]                 # 37 (P5/32-large)
+
+  - [[31, 34, 37], 1, Detect, [nc]]             # 38 Detect(P3, P4, P5)

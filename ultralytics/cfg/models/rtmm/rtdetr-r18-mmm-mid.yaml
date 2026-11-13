@@ -1,0 +1,78 @@
+# Ultralytics YOLO 🚀, AGPL-3.0 license
+# RT-DETR-r18 Trimodal Mid-level Fusion model
+# Mid-level fusion: A/B/C 三路独立 ResNet18 骨干 + P3 Concat 融合
+# 仿照 rtdetr-r18-mm-mid.yaml 双模态架构扩展到三模态
+# 契约：第 5 字段 'A'/'B'/'C' 对应 data.yaml modality_used 顺序槽位
+
+# Parameters
+nc: 80  # number of classes
+scales: # model compound scaling constants
+  # [depth, width, max_channels]
+  l: [1.00, 1.00, 1024]
+
+# Model architecture
+backbone:
+  # 路径 A (modality_used[0])
+  - [-1, 1, ConvNormLayer, [32, 3, 2, None, False, 'relu'], 'A'] # 0-P1/2 槽位A输入
+  - [-1, 1, ConvNormLayer, [32, 3, 1, None, False, 'relu']] # 1
+  - [-1, 1, ConvNormLayer, [64, 3, 1, None, False, 'relu']] # 2
+  - [-1, 1, nn.MaxPool2d, [3, 2, 1]] # 3-P2/4
+
+  # 路径 B (modality_used[1]) - 新输入起点
+  - [-1, 1, ConvNormLayer, [32, 3, 2, None, False, 'relu'], 'B'] # 4-P1/2 槽位B输入 (new start)
+  - [-1, 1, ConvNormLayer, [32, 3, 1, None, False, 'relu']] # 5
+  - [-1, 1, ConvNormLayer, [64, 3, 1, None, False, 'relu']] # 6
+  - [-1, 1, nn.MaxPool2d, [3, 2, 1]] # 7-P2/4
+
+  # 路径 C (modality_used[2]) - 新输入起点
+  - [-1, 1, ConvNormLayer, [32, 3, 2, None, False, 'relu'], 'C'] # 8-P1/2 槽位C输入 (new start)
+  - [-1, 1, ConvNormLayer, [32, 3, 1, None, False, 'relu']] # 9
+  - [-1, 1, ConvNormLayer, [64, 3, 1, None, False, 'relu']] # 10
+  - [-1, 1, nn.MaxPool2d, [3, 2, 1]] # 11-P2/4
+
+  # A 路 ResNet18 stages
+  - [3, 1, Blocks, [64, BasicBlock, 2, 2, 'relu']] # 12-A Stage2
+  - [-1, 1, Blocks, [128, BasicBlock, 2, 3, 'relu']] # 13-A Stage3 P3/8
+
+  # B 路 ResNet18 stages
+  - [7, 1, Blocks, [64, BasicBlock, 2, 2, 'relu']] # 14-B Stage2
+  - [-1, 1, Blocks, [128, BasicBlock, 2, 3, 'relu']] # 15-B Stage3 P3/8
+
+  # C 路 ResNet18 stages
+  - [11, 1, Blocks, [64, BasicBlock, 2, 2, 'relu']] # 16-C Stage2
+  - [-1, 1, Blocks, [128, BasicBlock, 2, 3, 'relu']] # 17-C Stage3 P3/8
+
+  # Mid-level Fusion at P3（三路 Concat）
+  - [[13, 15, 17], 1, Concat, [1]] # 18 - Concat A/B/C features at P3
+  - [-1, 1, Conv, [256, 1, 1]] # 19 - Fusion conv to reduce channels
+
+  # Continue processing fused features
+  - [-1, 1, Blocks, [256, BasicBlock, 2, 4, 'relu']] # 20-P4/16
+  - [-1, 1, Blocks, [512, BasicBlock, 2, 5, 'relu']] # 21-P5/32
+
+head:
+  # Feature projection and processing (similar to standard RT-DETR)
+  - [-1, 1, Conv, [256, 1, 1, None, 1, 1, False]]  # 22 input_proj.2
+  - [-1, 1, AIFI, [1024, 8]] # 23 - Using AIFI instead of HybridEncoder
+  - [-1, 1, Conv, [256, 1, 1]]  # 24, Y5, lateral_convs.0
+
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']] # 25
+  - [20, 1, Conv, [256, 1, 1, None, 1, 1, False]]  # 26 input_proj.1 (from P4)
+  - [[-2, -1], 1, Concat, [1]] # 27
+  - [-1, 3, RepC3, [256, 0.5]]  # 28, fpn_blocks.0
+  - [-1, 1, Conv, [256, 1, 1]]   # 29, Y4, lateral_convs.1
+
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']] # 30
+  - [19, 1, Conv, [256, 1, 1, None, 1, 1, False]]  # 31 input_proj.0 (from fused P3)
+  - [[-2, -1], 1, Concat, [1]]  # 32 cat backbone P3
+  - [-1, 3, RepC3, [256, 0.5]]    # 33, fpn_blocks.1
+
+  - [-1, 1, Conv, [256, 3, 2]]   # 34, downsample_convs.0
+  - [[-1, 29], 1, Concat, [1]]  # 35 cat Y4
+  - [-1, 3, RepC3, [256, 0.5]]    # 36, pan_blocks.0
+
+  - [-1, 1, Conv, [256, 3, 2]]   # 37, downsample_convs.1
+  - [[-1, 24], 1, Concat, [1]]  # 38 cat Y5
+  - [-1, 3, RepC3, [256, 0.5]]    # 39, pan_blocks.1
+
+  - [[33, 36, 39], 1, RTDETRDecoder, [nc, 256, 300, 4, 8, 3]]  # Detect(P3, P4, P5)

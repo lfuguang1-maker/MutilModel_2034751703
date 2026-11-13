@@ -1,0 +1,30 @@
+# 感谢多模态群友 Accepted 对本文件复现以及分享
+# DACFusion reproduction on the YOLOv8 family used by DACnet_v8.yaml.
+nc: 80
+scale: n
+dataset_config: {modality_used: [rgb, depth], Pch: 3, Xch: 3, Tch: 0}
+scales:
+  n: [0.33, 0.25, 1024]
+  s: [0.33, 0.50, 1024]
+  m: [0.67, 0.75, 768]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.25, 512]
+
+# DACFusionBackbone exposes virtual indices 1=P2, 2=P3, 3=P4, 4=P5.
+backbone:
+  - [-1, 1, DACFusionBackbone, [3, tiny, null, 0.1, 0.1], Dual] # 4
+  - [-1, 1, SPPF, [1024, 5]]                                  # 5
+head:
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]                   # 6
+  - [[-1, 3], 1, Concat, [1]]                                 # 7
+  - [-1, 3, C2f, [512]]                                       # 8
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]                   # 9
+  - [[-1, 2], 1, Concat, [1]]                                 # 10
+  - [-1, 3, C2f, [256]]                                       # 11 P3
+  - [-1, 1, Conv, [256, 3, 2]]                                # 12
+  - [[-1, 8], 1, Concat, [1]]                                 # 13
+  - [-1, 3, C2f, [512]]                                       # 14 P4
+  - [-1, 1, Conv, [512, 3, 2]]                                # 15
+  - [[-1, 5], 1, Concat, [1]]                                 # 16
+  - [-1, 3, C2f, [1024]]                                      # 17 P5
+  - [[11, 14, 17], 1, v8Detect, [nc]]

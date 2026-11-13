@@ -1,0 +1,74 @@
+# Ultralytics YOLOMM 🚀 Tri-Modal UAV Full-Fusion Variant (MAGE+BiTE, CVPR 2026)
+# 完整变体: 双流骨干 + P3/P4/P5 三层 MAGEBiTE 融合（论文 full-stage fusion 思路）
+# 论文: Iaboni & Abichandani, "Tri-Modal Fusion Transformers for UAV-based Object Detection", CVPR 2026
+# 说明: 每层融合保持 stride/通道不变; P3 用 MAGEBiTE 替代 head 侧对 RGB_P3 的单模态引用
+
+# Parameters
+nc: 80 # number of classes
+scales: # model compound scaling constants
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024]
+  s: [0.50, 0.50, 1024]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.50, 512]
+
+backbone:
+  # ========== RGB路径 (层0-10) - 完整骨干网到P5 ==========
+  - [-1, 1, Conv, [64, 3, 2], 'A']      # 0-P1/2 RGB路径起始
+  - [-1, 1, Conv, [128, 3, 2]]            # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]     # 2
+  - [-1, 1, Conv, [256, 3, 2]]            # 3-P3/8 (RGB_P3)
+  - [-1, 2, C3k2, [512, False, 0.25]]     # 4
+  - [-1, 1, Conv, [512, 3, 2]]            # 5-P4/16
+  - [-1, 2, C3k2, [512, True]]            # 6 (RGB_P4)
+  - [-1, 1, Conv, [1024, 3, 2]]           # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]]           # 8
+  - [-1, 1, SPPF, [1024, 5]]              # 9
+  - [-1, 2, C2PSA, [1024]]                # 10 (RGB_P5)
+
+  # ========== X路径 (层11-21) - 完整骨干网到P5 ==========
+  - [-1, 1, Conv, [64, 3, 2], 'B']        # 11-P1/2 X路径起始
+  - [-1, 1, Conv, [128, 3, 2]]            # 12-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]     # 13
+  - [-1, 1, Conv, [256, 3, 2]]            # 14-P3/8 (X_P3)
+  - [-1, 2, C3k2, [512, False, 0.25]]     # 15
+  - [-1, 1, Conv, [512, 3, 2]]            # 16-P4/16
+  - [-1, 2, C3k2, [512, True]]            # 17 (X_P4)
+  - [-1, 1, Conv, [1024, 3, 2]]           # 18-P5/32
+  - [-1, 2, C3k2, [1024, True]]           # 19
+  - [-1, 1, SPPF, [1024, 5]]              # 20
+  - [-1, 2, C2PSA, [1024]]                # 21 (X_P5)
+
+  # ========== P3/P4/P5 三层 MAGEBiTE 融合 ==========
+  # P3级融合
+  - [[4, 15], 1, MAGEBiTE, []]            # 22 P3融合: RGB_P3(4) + X_P3(15)
+  # P4级融合
+  - [[6, 17], 1, MAGEBiTE, []]            # 23 P4融合: RGB_P4(6) + X_P4(17)
+  - [-1, 2, C3k2, [1024, True]]           # 24 (Fused_P4)
+  # P5级融合
+  - [[10, 21], 1, MAGEBiTE, []]           # 25 P5融合: RGB_P5(10) + X_P5(21)
+  - [-1, 2, C3k2, [1024, True]]           # 26
+  - [-1, 1, C2PSA, [1024]]                # 27 (Fused_P5)
+
+# 标准YOLOv11检测头 (Neck + Head)
+head:
+  # 自顶向下路径 (FPN)
+  - [27, 1, nn.Upsample, [None, 2, "nearest"]]  # 28 Fused_P5上采样
+  - [[-1, 24], 1, Concat, [1]]                  # 29 连接Fused_P4
+  - [-1, 2, C3k2, [512, False]]                 # 30
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]  # 31
+  - [[-1, 22], 1, Concat, [1]]                  # 32 连接Fused_P3(22)
+  - [-1, 2, C3k2, [256, False]]                 # 33 (P3/8-small)
+
+  # 自底向上路径 (PAN)
+  - [-1, 1, Conv, [256, 3, 2]]                  # 34
+  - [[-1, 30], 1, Concat, [1]]                  # 35
+  - [-1, 2, C3k2, [512, False]]                 # 36 (P4/16-medium)
+
+  - [-1, 1, Conv, [512, 3, 2]]                  # 37
+  - [[-1, 27], 1, Concat, [1]]                  # 38
+  - [-1, 2, C3k2, [1024, True]]                 # 39 (P5/32-large)
+
+  - [[33, 36, 39], 1, Detect, [nc]]             # 40 Detect(P3, P4, P5)

@@ -1,0 +1,55 @@
+# 感谢多模态群友 Accepted 对本文件复现以及分享
+# MCF-Net RGB+Depth port: asymmetric-compatible PDC backbone + CMGA/CMSF bi-modal fusion.
+nc: 80
+scale: n
+dataset_config:
+  modality_used: [rgb, depth]
+  Pch: 3
+  Xch: 3
+  Tch: 0
+scales:
+  n: [0.50, 0.25, 1024]
+  s: [0.50, 0.50, 1024]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.50, 512]
+
+backbone:
+  - [-1, 1, Conv, [64, 3, 2], A]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 2, MCFPDCC2f, [256, 0.5, True]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 2, MCFPDCC2f, [512, 0.5, True]]         # 4 RGB P3
+  - [-1, 1, Conv, [64, 3, 2], B]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 1, MCFPDCC2f, [256, 0.5, True]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 1, MCFPDCC2f, [512, 0.5, True]]         # 9 Depth P3
+  - [[4, 9], 1, MCFBiFusion, [8, 16]]            # 10 fused P3
+  - [4, 1, Conv, [512, 3, 2]]
+  - [-1, 2, MCFPDCC2f, [512, 0.5, True]]         # 12 RGB P4
+  - [9, 1, Conv, [512, 3, 2]]
+  - [-1, 1, MCFPDCC2f, [512, 0.5, True]]         # 14 Depth P4
+  - [[12, 14], 1, MCFBiFusion, [8, 16]]          # 15 fused P4
+  - [12, 1, Conv, [1024, 3, 2]]
+  - [-1, 2, MCFPDCC2f, [1024, 0.5, True]]
+  - [-1, 1, SPPF, [1024, 5]]                     # 18 RGB P5
+  - [14, 1, Conv, [1024, 3, 2]]
+  - [-1, 1, MCFPDCC2f, [1024, 0.5, True]]
+  - [-1, 1, SPPF, [1024, 5]]                     # 21 Depth P5
+  - [[18, 21], 1, MCFBiFusion, [8, 16]]          # 22 fused P5
+
+head:
+  - [22, 1, nn.Upsample, [None, 2, nearest]]
+  - [[-1, 15], 1, Concat, [1]]
+  - [-1, 2, C3k2, [512, False]]                  # 25
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]
+  - [[-1, 10], 1, Concat, [1]]
+  - [-1, 2, C3k2, [256, False]]                  # 28 P3
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 25], 1, Concat, [1]]
+  - [-1, 2, C3k2, [512, False]]                  # 31 P4
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [[-1, 22], 1, Concat, [1]]
+  - [-1, 2, C3k2, [1024, True]]                  # 34 P5
+  - [[28, 31, 34], 1, Detect, [nc]]
