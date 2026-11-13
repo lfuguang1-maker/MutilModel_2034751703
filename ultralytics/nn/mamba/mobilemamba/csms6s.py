@@ -10,11 +10,15 @@ if hasattr(torch.amp, "custom_fwd"):
 else:
     def custom_fwd(*args, **kwargs):
         kwargs.pop("device_type", None)
-        return torch.cuda.amp.custom_fwd(*args, **kwargs)
+        if args and callable(args[0]):
+            return torch.cuda.amp.custom_fwd(args[0], **kwargs)
+        return lambda fn: torch.cuda.amp.custom_fwd(fn, **kwargs)
 
     def custom_bwd(*args, **kwargs):
         kwargs.pop("device_type", None)
-        return torch.cuda.amp.custom_bwd(*args, **kwargs)
+        if args and callable(args[0]):
+            return torch.cuda.amp.custom_bwd(args[0])
+        return lambda fn: torch.cuda.amp.custom_bwd(fn)
 
 
 WITH_SELECTIVESCAN_OFLEX = True
