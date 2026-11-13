@@ -2,6 +2,20 @@ import time
 import torch
 import warnings
 
+# PyTorch 2.2 exposes AMP autograd decorators under torch.cuda.amp,
+# while newer versions expose them under torch.amp with device_type.
+if hasattr(torch.amp, "custom_fwd"):
+    custom_fwd = torch.amp.custom_fwd
+    custom_bwd = torch.amp.custom_bwd
+else:
+    def custom_fwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_fwd(*args, **kwargs)
+
+    def custom_bwd(*args, **kwargs):
+        kwargs.pop("device_type", None)
+        return torch.cuda.amp.custom_bwd(*args, **kwargs)
+
 
 WITH_SELECTIVESCAN_OFLEX = True
 WITH_SELECTIVESCAN_CORE = False
@@ -70,7 +84,7 @@ def selective_scan_torch(
 
 class SelectiveScanCuda(torch.autograd.Function):
     @staticmethod
-    @torch.amp.custom_fwd(device_type="cuda")
+    @custom_fwd(device_type="cuda")
     def forward(ctx, u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=False, oflex=True, backend=None):
         ctx.delta_softplus = delta_softplus
         backend = "oflex" if WITH_SELECTIVESCAN_OFLEX and (backend is None) else backend
@@ -87,7 +101,7 @@ class SelectiveScanCuda(torch.autograd.Function):
         return out
     
     @staticmethod
-    @torch.amp.custom_bwd(device_type="cuda")
+    @custom_bwd(device_type="cuda")
     def backward(ctx, dout, *args):
         u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
         backend = ctx.backend
